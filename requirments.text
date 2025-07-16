@@ -2,3 +2,4 @@ streamlit==1.22.0
 pandas==1.5.3
 paho-mqtt==1.6.1
 Pillow==9.4.0
+plotly==5.13.0
