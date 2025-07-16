@@ -3,17 +3,30 @@ import pandas as pd
 import datetime
 import time
 import json
-from PIL import Image
 
-# Try to import MQTT with fallback
+# Import with error handling
 try:
     import paho.mqtt.client as mqtt
     MQTT_AVAILABLE = True
 except ImportError:
     MQTT_AVAILABLE = False
-    st.error("MQTT library not available - some features will be limited")
+    st.warning("MQTT functionality unavailable - install paho-mqtt")
 
-# Configuration
+try:
+    from PIL import Image
+    PILLOW_AVAILABLE = True
+except ImportError:
+    PILLOW_AVAILABLE = False
+    st.warning("Image processing unavailable - install Pillow")
+
+try:
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Advanced charts unavailable - install plotly")
+
+# MQTT Configuration
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 PUMP_CONTROL_TOPIC = "smart-hydro/pump-control"
@@ -30,44 +43,6 @@ if 'alarms' not in st.session_state:
     st.session_state.alarms = []
 if 'moisture_history' not in st.session_state:
     st.session_state.moisture_history = pd.DataFrame(columns=["Timestamp", "Moisture"])
-if 'mqtt_connected' not in st.session_state:
-    st.session_state.mqtt_connected = False
-
-# MQTT Client Setup
-if MQTT_AVAILABLE:
-    def on_connect(client, userdata, flags, rc):
-        if rc == 0:
-            st.session_state.mqtt_connected = True
-            client.subscribe(SENSOR_DATA_TOPIC)
-        else:
-            st.session_state.mqtt_connected = False
-
-    def on_message(client, userdata, msg):
-        try:
-            data = json.loads(msg.payload.decode())
-            st.session_state.moisture_level = data.get("moisture", 0)
-            st.session_state.pump_status = data.get("pump_status", "OFF")
-            
-            new_entry = pd.DataFrame({
-                "Timestamp": [datetime.datetime.now()],
-                "Moisture": [st.session_state.moisture_level]
-            })
-            st.session_state.moisture_history = pd.concat(
-                [st.session_state.moisture_history, new_entry]
-            ).tail(100)
-            
-        except Exception as e:
-            st.error(f"Error processing message: {str(e)}")
-
-    try:
-        mqtt_client = mqtt.Client()
-        mqtt_client.on_connect = on_connect
-        mqtt_client.on_message = on_message
-        mqtt_client.connect(MQTT_BROKER, MTT_PORT, 60)
-        mqtt_client.loop_start()
-    except Exception as e:
-        st.error(f"MQTT connection failed: {str(e)}")
-        MQTT_AVAILABLE = False
 
 # Page Configuration
 st.set_page_config(
@@ -76,10 +51,43 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS (same as before)
+# Custom CSS
 st.markdown("""
 <style>
-    /* Your existing CSS styles */
+    .main {
+        background-color: #f0f2f6;
+    }
+    .stButton>button {
+        background-color: #4CAF50;
+        color: white;
+        border-radius: 5px;
+        padding: 10px 24px;
+    }
+    .stButton>button:disabled {
+        background-color: #f44336;
+    }
+    .moisture-level {
+        font-size: 2.5rem;
+        font-weight: bold;
+        text-align: center;
+        margin: 10px 0;
+    }
+    .moisture-good {
+        color: #4CAF50;
+    }
+    .moisture-warning {
+        color: #FFC107;
+    }
+    .moisture-danger {
+        color: #F44336;
+    }
+    .status-card {
+        background-color: white;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,7 +108,15 @@ def control_pump(action):
     except Exception as e:
         st.error(f"Error controlling pump: {str(e)}")
 
-# (Keep all your other functions the same as before)
+def get_moisture_class(level):
+    if level > 60:
+        return "moisture-good"
+    elif level > 30:
+        return "moisture-warning"
+    else:
+        return "moisture-danger"
+
+# [Include all your other functions here...]
 
 # Layout
 col1, col2 = st.columns([1, 2])
@@ -115,35 +131,55 @@ with col1:
     </div>
     """, unsafe_allow_html=True)
     
-    # (Rest of your column 1 content)
+    # [Rest of your column 1 content...]
 
 with col2:
     # Moisture Chart
     st.markdown("### Moisture History")
     if not st.session_state.moisture_history.empty:
-        st.line_chart(
-            st.session_state.moisture_history.set_index('Timestamp')['Moisture'],
-            use_container_width=True
-        )
+        if PLOTLY_AVAILABLE:
+            fig = px.line(
+                st.session_state.moisture_history,
+                x="Timestamp",
+                y="Moisture",
+                title="Soil Moisture Over Time",
+                labels={"Moisture": "Moisture Level (%)"},
+                range_y=[0, 100]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.line_chart(
+                st.session_state.moisture_history.set_index('Timestamp')['Moisture'],
+                use_container_width=True
+            )
     else:
         st.info("No moisture data available yet")
     
-    # (Rest of your column 2 content)
+    # [Rest of your column 2 content...]
 
 # System Status
 st.markdown("### System Status")
 status_cols = st.columns(3)
 with status_cols[0]:
-    st.markdown("**MQTT Connection**")
-    if MQTT_AVAILABLE:
-        st.success("✅ Connected" if st.session_state.mqtt_connected else "❌ Disconnected")
-    else:
-        st.error("❌ Not Available")
+    st.markdown("**Dependencies**")
+    st.write(f"MQTT: {'✅' if MQTT_AVAILABLE else '❌'}")
+    st.write(f"Pillow: {'✅' if PILLOW_AVAILABLE else '❌'}")
+    st.write(f"Plotly: {'✅' if PLOTLY_AVAILABLE else '❌'}")
 
-# (Rest of your app content)
+# [Rest of your app...]
+
+# Initialize MQTT if available
+if MQTT_AVAILABLE:
+    try:
+        mqtt_client = mqtt.Client()
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_message = on_message
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mqtt_client.loop_start()
+    except Exception as e:
+        st.error(f"MQTT connection failed: {str(e)}")
+        MQTT_AVAILABLE = False
 
 # Keep the app running
 while True:
-    if MQTT_AVAILABLE:
-        mqtt_client.loop()
     time.sleep(1)
