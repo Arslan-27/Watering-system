@@ -4,6 +4,7 @@ import requests
 import datetime
 import time
 from PIL import Image
+import plotly.express as px
 
 # Page configuration
 st.set_page_config(
@@ -41,18 +42,34 @@ st.markdown("""
         margin-bottom: 15px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
+    .moisture-level {
+        font-size: 2.5rem;
+        font-weight: bold;
+        text-align: center;
+        margin: 10px 0;
+    }
+    .moisture-good {
+        color: #4CAF50;
+    }
+    .moisture-warning {
+        color: #FFC107;
+    }
+    .moisture-danger {
+        color: #F44336;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # App title and description
 st.title("💧 Smart Pump Controller")
-st.markdown("Control your water pump remotely and set automated schedules.")
+st.markdown("Control your water pump remotely and monitor soil moisture levels.")
 
 # Device configuration (replace with your ESP8266 IP)
 ESP8266_IP = "192.168.1.100"
 PUMP_ON_URL = f"http://{ESP8266_IP}/pump_on"
 PUMP_OFF_URL = f"http://{ESP8266_IP}/pump_off"
 STATUS_URL = f"http://{ESP8266_IP}/status"
+MOISTURE_URL = f"http://{ESP8266_IP}/moisture"
 
 # Initialize session state variables
 if 'pump_status' not in st.session_state:
@@ -61,6 +78,10 @@ if 'schedules' not in st.session_state:
     st.session_state.schedules = pd.DataFrame(columns=["Day", "Start Time", "End Time", "Duration", "Enabled"])
 if 'alarms' not in st.session_state:
     st.session_state.alarms = []
+if 'moisture_level' not in st.session_state:
+    st.session_state.moisture_level = 0
+if 'moisture_history' not in st.session_state:
+    st.session_state.moisture_history = pd.DataFrame(columns=["Timestamp", "Moisture"])
 
 # Function to control pump
 def control_pump(action):
@@ -82,57 +103,69 @@ def control_pump(action):
     except Exception as e:
         st.error(f"Error communicating with device: {str(e)}")
 
-# Function to get pump status
-def get_pump_status():
+# Function to get device status
+def get_device_status():
     try:
+        # Get pump status
         response = requests.get(STATUS_URL, timeout=5)
         if response.status_code == 200:
             data = response.json()
             st.session_state.pump_status = data.get("pump_status", "OFF")
-    except:
-        pass  # Silently fail if device is unreachable
+        
+        # Get moisture level
+        response = requests.get(MOISTURE_URL, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            moisture = data.get("moisture", 0)
+            st.session_state.moisture_level = moisture
+            
+            # Add to history (keep last 100 readings)
+            new_entry = pd.DataFrame({
+                "Timestamp": [datetime.datetime.now()],
+                "Moisture": [moisture]
+            })
+            st.session_state.moisture_history = pd.concat(
+                [st.session_state.moisture_history, new_entry]
+            ).tail(100)
+            
+    except Exception as e:
+        st.error(f"Error getting device status: {str(e)}")
 
-# Function to add schedule
-def add_schedule():
-    day = st.session_state.new_schedule_day
-    start_time = st.session_state.new_schedule_start
-    end_time = st.session_state.new_schedule_end
-    enabled = st.session_state.new_schedule_enabled
-    
-    duration = (datetime.datetime.combine(datetime.date.today(), end_time) - 
-                datetime.datetime.combine(datetime.date.today(), start_time)).seconds // 60
-    
-    new_schedule = pd.DataFrame([{
-        "Day": day,
-        "Start Time": start_time.strftime("%H:%M"),
-        "End Time": end_time.strftime("%H:%M"),
-        "Duration": f"{duration} minutes",
-        "Enabled": enabled
-    }])
-    
-    st.session_state.schedules = pd.concat([st.session_state.schedules, new_schedule], ignore_index=True)
-    st.success("Schedule added successfully!")
-
-# Function to delete schedule
-def delete_schedule(index):
-    st.session_state.schedules = st.session_state.schedules.drop(index).reset_index(drop=True)
-    st.success("Schedule deleted successfully!")
-
-# Function to add alarm
-def add_alarm():
-    alarm_time = st.session_state.new_alarm_time
-    st.session_state.alarms.append(alarm_time.strftime("%H:%M"))
-    st.success(f"Alarm set for {alarm_time.strftime('%H:%M')}")
-
-# Function to delete alarm
-def delete_alarm(index):
-    deleted_alarm = st.session_state.alarms.pop(index)
-    st.success(f"Alarm for {deleted_alarm} deleted")
+# Function to get moisture status class
+def get_moisture_class(level):
+    if level > 60:
+        return "moisture-good"
+    elif level > 30:
+        return "moisture-warning"
+    else:
+        return "moisture-danger"
 
 # Layout columns
 col1, col2 = st.columns([1, 2])
 
 with col1:
+    # Moisture level display
+    st.markdown("### Soil Moisture Level")
+    with st.container():
+        moisture_class = get_moisture_class(st.session_state.moisture_level)
+        st.markdown(f"""
+        <div class="{moisture_class} moisture-level">
+            {st.session_state.moisture_level}%
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Moisture status indicator
+        if st.session_state.moisture_level > 60:
+            st.success("Soil moisture level is good")
+        elif st.session_state.moisture_level > 30:
+            st.warning("Soil moisture level is moderate")
+        else:
+            st.error("Soil moisture level is low - consider watering")
+        
+        # Refresh button
+        if st.button("Refresh Moisture Level", key="btn_refresh_moisture"):
+            get_device_status()
+    
     # Pump control card
     st.markdown("### Pump Control")
     with st.container():
@@ -149,22 +182,29 @@ with col1:
         
         # Status refresh
         if st.button("Refresh Status", key="btn_refresh"):
-            get_pump_status()
-    
-    # Alarm settings
-    st.markdown("### Alarm Settings")
-    with st.container():
-        st.time_input("Set Alarm Time", key="new_alarm_time")
-        st.button("Add Alarm", on_click=add_alarm)
-        
-        if st.session_state.alarms:
-            st.markdown("**Active Alarms:**")
-            for i, alarm in enumerate(st.session_state.alarms):
-                cols = st.columns([3, 1])
-                cols[0].write(f"⏰ {alarm}")
-                cols[1].button("Delete", key=f"del_alarm_{i}", on_click=delete_alarm, args=(i,))
+            get_device_status()
 
 with col2:
+    # Moisture history chart
+    st.markdown("### Moisture History")
+    if not st.session_state.moisture_history.empty:
+        fig = px.line(
+            st.session_state.moisture_history,
+            x="Timestamp",
+            y="Moisture",
+            title="Soil Moisture Over Time",
+            labels={"Moisture": "Moisture Level (%)"},
+            range_y=[0, 100]
+        )
+        fig.update_layout(
+            xaxis_title="Time",
+            yaxis_title="Moisture (%)",
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No moisture data available yet. Refresh to get readings.")
+    
     # Scheduling section
     st.markdown("### Pump Scheduling")
     with st.container():
@@ -219,7 +259,21 @@ with st.container():
     
     with status_cols[2]:
         st.markdown("**System Uptime**")
-        st.write("24 hours")  # Replace with actual uptime from device
+        try:
+            response = requests.get(STATUS_URL, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                uptime = data.get("uptime", 0)
+                hours = uptime // 3600
+                minutes = (uptime % 3600) // 60
+                st.write(f"{hours}h {minutes}m")
+        except:
+            st.write("Unknown")
+
+# Initialize device status on first run
+if 'initialized' not in st.session_state:
+    get_device_status()
+    st.session_state.initialized = True
 
 # Footer
 st.markdown("---")
