@@ -4,7 +4,14 @@ import requests
 import datetime
 import time
 from PIL import Image
-import plotly.express as px
+
+# Try to import plotly with fallback
+try:
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Plotly not available - charts will be simplified")
 
 # Page configuration
 st.set_page_config(
@@ -140,6 +147,43 @@ def get_moisture_class(level):
     else:
         return "moisture-danger"
 
+# Function to add schedule
+def add_schedule():
+    day = st.session_state.new_schedule_day
+    start_time = st.session_state.new_schedule_start
+    end_time = st.session_state.new_schedule_end
+    enabled = st.session_state.new_schedule_enabled
+    
+    duration = (datetime.datetime.combine(datetime.date.today(), end_time) - 
+                datetime.datetime.combine(datetime.date.today(), start_time)).seconds // 60
+    
+    new_schedule = pd.DataFrame([{
+        "Day": day,
+        "Start Time": start_time.strftime("%H:%M"),
+        "End Time": end_time.strftime("%H:%M"),
+        "Duration": f"{duration} minutes",
+        "Enabled": enabled
+    }])
+    
+    st.session_state.schedules = pd.concat([st.session_state.schedules, new_schedule], ignore_index=True)
+    st.success("Schedule added successfully!")
+
+# Function to delete schedule
+def delete_schedule(index):
+    st.session_state.schedules = st.session_state.schedules.drop(index).reset_index(drop=True)
+    st.success("Schedule deleted successfully!")
+
+# Function to add alarm
+def add_alarm():
+    alarm_time = st.session_state.new_alarm_time
+    st.session_state.alarms.append(alarm_time.strftime("%H:%M"))
+    st.success(f"Alarm set for {alarm_time.strftime('%H:%M')}")
+
+# Function to delete alarm
+def delete_alarm(index):
+    deleted_alarm = st.session_state.alarms.pop(index)
+    st.success(f"Alarm for {deleted_alarm} deleted")
+
 # Layout columns
 col1, col2 = st.columns([1, 2])
 
@@ -184,24 +228,43 @@ with col1:
         if st.button("Refresh Status", key="btn_refresh"):
             get_device_status()
 
+    # Alarm settings
+    st.markdown("### Alarm Settings")
+    with st.container():
+        st.time_input("Set Alarm Time", key="new_alarm_time")
+        st.button("Add Alarm", on_click=add_alarm)
+        
+        if st.session_state.alarms:
+            st.markdown("**Active Alarms:**")
+            for i, alarm in enumerate(st.session_state.alarms):
+                cols = st.columns([3, 1])
+                cols[0].write(f"⏰ {alarm}")
+                cols[1].button("Delete", key=f"del_alarm_{i}", on_click=delete_alarm, args=(i,))
+
 with col2:
     # Moisture history chart
     st.markdown("### Moisture History")
     if not st.session_state.moisture_history.empty:
-        fig = px.line(
-            st.session_state.moisture_history,
-            x="Timestamp",
-            y="Moisture",
-            title="Soil Moisture Over Time",
-            labels={"Moisture": "Moisture Level (%)"},
-            range_y=[0, 100]
-        )
-        fig.update_layout(
-            xaxis_title="Time",
-            yaxis_title="Moisture (%)",
-            showlegend=False
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if PLOTLY_AVAILABLE:
+            fig = px.line(
+                st.session_state.moisture_history,
+                x="Timestamp",
+                y="Moisture",
+                title="Soil Moisture Over Time",
+                labels={"Moisture": "Moisture Level (%)"},
+                range_y=[0, 100]
+            )
+            fig.update_layout(
+                xaxis_title="Time",
+                yaxis_title="Moisture (%)",
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.line_chart(
+                st.session_state.moisture_history.set_index('Timestamp')['Moisture'],
+                use_container_width=True
+            )
     else:
         st.info("No moisture data available yet. Refresh to get readings.")
     
